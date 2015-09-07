@@ -13,9 +13,16 @@ function new {
   (cd ${app_name}/.repository && git init --quiet)
   cat <<EOF > ${app_name}/config.env
 LAMBDA_EXECUTION_ROLE=arn:aws:iam::ACCOUNT_NUMBER:role/lambda_basic_execution
+AWSCLI_LAMBDA_UPLOAD_PROFILE=default
+AWSCLI_LAMBDA_INVOKE_PROFILE=default
 EOF
-  echo -n "Great! Now cd into ${app_name} and "
-  echo    "\`neuro add /posts/new get\`"
+  echo "Great! Now cd into ${app_name} and get started building your application."
+  echo "Next steps:"
+  echo "  * Edit config.env to set your profiles and roles."
+  echo "  * Add an endpoint (try: \`neuro add /posts/new get\`)"
+  echo "  * Deploy the lambda function for the endpoint (\`neuro deploy\`)"
+  echo "  * Invoke the lambda function (\`neuro invoke\`, passes valid.json to function)"
+  echo "  * Change which endpoint you're working on with \`neuro edit /posts/new get\`"
 }
 
 function add {
@@ -53,7 +60,8 @@ function deploy {
                                       -e 's/.js$//' -e "s/.${method}$//"`
   local fn_name=`echo ${method}${path} | sed -e 's./._.g'`
   zip -q ${fn_name}.zip index.js
-  aws lambda create-function --function-name "${fn_name}" \
+  aws --profile ${AWSCLI_LAMBDA_UPLOAD_PROFILE} \
+      lambda create-function --function-name "${fn_name}" \
                              --runtime nodejs \
                              --handler index.handler \
                              --role ${LAMBDA_EXECUTION_ROLE} \
@@ -67,7 +75,8 @@ function invoke {
   local path=`readlink index.js | sed -e 's!.repository/endpoints!!' \
                                       -e 's/.js$//' -e "s/.${method}$//"`
   local fn_name=`echo ${method}${path} | sed -e 's./._.g'`
-  aws lambda invoke --function-name ${fn_name} \
+  aws --profile ${AWSCLI_LAMBDA_INVOKE_PROFILE} \
+      lambda invoke --function-name ${fn_name} \
                     --invocation-type RequestResponse \
                     --log-type Tail \
                     --payload fileb://valid.json \
@@ -83,7 +92,20 @@ function invoke {
   rm log.txt
 }
 
+function __help {
+  help $*
+}
+
+function help {
+  echo "Available Commands"
+  echo " *  new PROJECTNAME"
+  echo " *  add HREF HTTPMETHOD"
+  echo " *  edit HREF HTTPMETHOD"
+  echo " *  deploy"
+  echo " *  invoke"
+}
+
 fn=$1 ; shift
-fn_name=`echo ${fn} | sed -e 's.-._.'`
+fn_name=`echo ${fn} | sed -e 's.-._.g'`
 source config.env
 ${fn_name} $*
