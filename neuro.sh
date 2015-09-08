@@ -1,11 +1,12 @@
 # TODO:
-# * deploy: check for update v. create function (store ARN somewhere?)
 # * add: update a swagger spec
 # * import: batch create endpoints from swagger spec
 # * inventory: show known endpoints (akin to `rake routes`)
 # * clone: use an existing git repo of fuction endpoints
 # * commit to git on deploy
 # * doc how to wrap common things (auth, etc) into a node package to deploy w/
+
+set -e
 
 function new {
   local app_name=$1
@@ -14,6 +15,7 @@ function new {
   cat <<EOF > ${app_name}/config.env
 LAMBDA_EXECUTION_ROLE=arn:aws:iam::ACCOUNT_NUMBER:role/lambda_basic_execution
 AWSCLI_LAMBDA_UPLOAD_PROFILE=default
+AWSCLI_LAMBDA_LIST_PROFILE=default
 AWSCLI_LAMBDA_INVOKE_PROFILE=default
 EOF
   echo "Great! Now cd into ${app_name} and get started building your application."
@@ -60,12 +62,21 @@ function deploy {
                                       -e 's/.js$//' -e "s/.${method}$//"`
   local fn_name=`echo ${method}${path} | sed -e 's./._.g'`
   zip -q ${fn_name}.zip index.js
-  aws --profile ${AWSCLI_LAMBDA_UPLOAD_PROFILE} \
-      lambda create-function --function-name "${fn_name}" \
-                             --runtime nodejs \
-                             --handler index.handler \
-                             --role ${LAMBDA_EXECUTION_ROLE} \
-                             --zip-file fileb://${fn_name}.zip
+
+  neuro.function_exists $fn_name
+  if [ $? == 0 ] ; then
+    aws --profile ${AWSCLI_LAMBDA_UPLOAD_PROFILE} \
+        lambda update-function-code --function-name "${fn_name}" \
+                                    --zip-file fileb://${fn_name}.zip
+  else
+    aws --profile ${AWSCLI_LAMBDA_UPLOAD_PROFILE} \
+        lambda create-function --function-name "${fn_name}" \
+                               --runtime nodejs \
+                               --handler index.handler \
+                               --role ${LAMBDA_EXECUTION_ROLE} \
+                               --zip-file fileb://${fn_name}.zip
+  fi
+
   rm ${fn_name}.zip
 }
 
@@ -103,6 +114,16 @@ function help {
   echo " *  edit HREF HTTPMETHOD"
   echo " *  deploy"
   echo " *  invoke"
+}
+
+function neuro.function_exists {
+  local fn_name=$1
+  aws --profile ${AWSCLI_LAMBDA_LIST_PROFILE} \
+      lambda get-function --function-name ${fn_name} 2>&1 > /dev/null
+  return $?
+#  aws --profile ${AWSCLI_LAMBDA_LIST_PROFILE} \
+#      --query "Functions[?FunctionName == '$1'].FunctionName | [0]" \
+#      lambda list-functions
 }
 
 fn=$1 ; shift
