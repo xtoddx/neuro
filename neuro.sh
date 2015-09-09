@@ -14,9 +14,11 @@ function new {
   (cd ${app_name}/.repository && git init --quiet)
   cat <<EOF > ${app_name}/config.env
 LAMBDA_EXECUTION_ROLE=arn:aws:iam::ACCOUNT_NUMBER:role/lambda_basic_execution
-AWSCLI_LAMBDA_UPLOAD_PROFILE=default
-AWSCLI_LAMBDA_LIST_PROFILE=default
-AWSCLI_LAMBDA_INVOKE_PROFILE=default
+AWSCLI_DEFAULT_PROFILE=default
+AWSCLI_BOOTSTRAP_PROFILE=dangerous_profile_with_iam_policy_permissions
+AWSCLI_LAMBDA_UPLOAD_PROFILE=\${AWSCLI_DEFAULT_PROFILE}
+AWSCLI_LAMBDA_LIST_PROFILE=\${AWSCLI_DEFAULT_PROFILE}
+AWSCLI_LAMBDA_INVOKE_PROFILE=\${AWSCLI_DEFAULT_PROFILE}
 EOF
   echo "Great! Now cd into ${app_name} and get started building your application."
   echo "Next steps:"
@@ -103,12 +105,68 @@ function invoke {
   rm log.txt
 }
 
+function bootstrap_aws {
+  local role_name=neuro_lambda_bootstrap
+  cat <<EOF > assume_role_policy.json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "",
+      "Effect": "Allow",
+      "Principal": {
+        "Service": "lambda.amazonaws.com"
+      },
+      "Action": "sts:AssumeRole"
+    }
+  ]
+}
+EOF
+  role_arn=$(
+  aws --profile ${AWSCLI_BOOTSTRAP_PROFILE} \
+      --query "Role.Arn" \
+      iam create-role \
+      --role-name ${role_name} \
+      --assume-role-policy-document file://assume_role_policy.json
+  )
+  rm assume_role_policy.json
+  cat <<EOF > exe_policy.json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": [
+        "logs:CreateLogGroup",
+        "logs:CreateLogStream",
+        "logs:PutLogEvents"
+      ],
+      "Resource": "arn:aws:logs:*:*:*"
+    }
+  ]
+}
+EOF
+  aws --profile ${AWSCLI_BOOTSTRAP_PROFILE} \
+      iam put-role-policy \
+      --role-name ${role_name} \
+      --policy-name neuro_bootstrap_exe_policy \
+      --policy-document file://exe_policy.json
+  rm exe_policy.json
+  echo "created IAM role ${role_name}"
+  echo "You should put the value"
+  echo -n "    LAMBDA_EXECUTION_ROLE="
+  echo ${role_arn}
+  echo "into your config.env file to use this exeuction role"
+  echo "(replacing any value that is currently there.)"
+}
+
 function __help {
   help $*
 }
 
 function help {
   echo "Available Commands"
+  echo " *  bootstrap-aws"
   echo " *  new PROJECTNAME"
   echo " *  add HREF HTTPMETHOD"
   echo " *  edit HREF HTTPMETHOD"
@@ -128,5 +186,7 @@ function neuro.function_exists {
 
 fn=$1 ; shift
 fn_name=`echo ${fn} | sed -e 's.-._.g'`
-source config.env
+if [ -f config.env ] ; then
+  source config.env
+fi
 ${fn_name} $*
