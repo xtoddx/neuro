@@ -1,3 +1,4 @@
+#!/bin/bash
 # TODO:
 # * add: update a swagger spec
 # * import: batch create endpoints from swagger spec
