@@ -6,7 +6,7 @@
 # * commit to git on deploy
 # * doc how to wrap common things (auth, etc) into a node package to deploy w/
 
-set -e
+# set -e
 
 function new {
   local app_name=$1
@@ -53,6 +53,7 @@ function edit {
   local method=$2 # TODO: optional if there is only one method
   if [ -f index.js ] ; then rm index.js ; fi
   if [ -f valid.json ] ; then rm valid.json ; fi
+  if [ -f policy.json ] ; then rm policy.json ; fi
   ln -s .repository/endpoints${href}.${method}.js index.js
   ln -s .repository/endpoints${href}.${method}.valid.json valid.json
 }
@@ -160,6 +161,66 @@ EOF
   echo "(replacing any value that is currently there.)"
 }
 
+function add_role {
+  local name=$1
+  mkdir -p .repository/roles/${name}
+  cat <<EOF > .repository/roles/${name}/policy.json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": [
+        "logs:CreateLogGroup",
+        "logs:CreateLogStream",
+        "logs:PutLogEvents"
+      ],
+      "Resource": "arn:aws:logs:*:*:*"
+    }
+  ]
+}
+EOF
+  edit_role ${name}
+}
+
+function edit_role {
+  local name=$1
+  if [ -f index.js ] ; then rm index.js ; fi
+  if [ -f valid.json ] ; then rm valid.json ; fi
+  if [ -f policy.json ] ; then rm policy.json ; fi
+  ln -s .repository/roles/${name}/policy.json
+}
+
+function deploy_role {
+  local name=`basename $(dirname $(readlink policy.json))`
+  cat <<EOF > assume_role_policy.json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "",
+      "Effect": "Allow",
+      "Principal": {
+        "Service": "lambda.amazonaws.com"
+      },
+      "Action": "sts:AssumeRole"
+    }
+  ]
+}
+EOF
+  aws --profile ${AWSCLI_POLICY_PROFILE} \
+      --query "Role.Arn" \
+      iam create-role \
+      --role-name ${name} \
+      --assume-role-policy-document file://assume_role_policy.json
+  rm assume_role_policy.json
+  aws --profile ${AWSCLI_POLICY_PROFILE} \
+      iam put-role-policy \
+      --role-name ${name} \
+      --policy-name neuro_bootstrap_exe_policy \
+      --policy-document file://policy.json
+}
+
 function __help {
   help $*
 }
@@ -172,6 +233,9 @@ function help {
   echo " *  edit HREF HTTPMETHOD"
   echo " *  deploy"
   echo " *  invoke"
+  echo " *  add-role ROLENAME"
+  echo " *  edit-role ROLENAME"
+  echo " *  deploy-role"
 }
 
 function neuro.function_exists {
