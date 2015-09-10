@@ -6,7 +6,7 @@
 # * commit to git on deploy
 # * doc how to wrap common things (auth, etc) into a node package to deploy w/
 
-# set -e
+set -e
 
 function new {
   local app_name=$1
@@ -15,7 +15,7 @@ function new {
   cat <<EOF > ${app_name}/config.env
 LAMBDA_EXECUTION_ROLE=arn:aws:iam::ACCOUNT_NUMBER:role/lambda_basic_execution
 AWSCLI_DEFAULT_PROFILE=default
-AWSCLI_BOOTSTRAP_PROFILE=dangerous_profile_with_iam_policy_permissions
+AWSCLI_ROLE_PROFILE=dangerous_profile_with_iam_policy_permissions
 AWSCLI_LAMBDA_UPLOAD_PROFILE=\${AWSCLI_DEFAULT_PROFILE}
 AWSCLI_LAMBDA_LIST_PROFILE=\${AWSCLI_DEFAULT_PROFILE}
 AWSCLI_LAMBDA_INVOKE_PROFILE=\${AWSCLI_DEFAULT_PROFILE}
@@ -45,6 +45,7 @@ EOF
   cat <<EOF > .repository/endpoints${href}.${method}.valid.json
 {}
 EOF
+  echo > .repository/endpoints${href}.${method}.config.env
   edit ${href} ${method}
 }
 
@@ -53,9 +54,11 @@ function edit {
   local method=$2 # TODO: optional if there is only one method
   if [ -f index.js ] ; then rm index.js ; fi
   if [ -f valid.json ] ; then rm valid.json ; fi
+  if [ -f config.function.env ] ; then rm config.function.env ; fi
   if [ -f policy.json ] ; then rm policy.json ; fi
   ln -s .repository/endpoints${href}.${method}.js index.js
   ln -s .repository/endpoints${href}.${method}.valid.json valid.json
+  ln -s .repository/endpoints${href}.${method}.config.env config.function.env
 }
 
 function deploy {
@@ -71,6 +74,10 @@ function deploy {
     aws --profile ${AWSCLI_LAMBDA_UPLOAD_PROFILE} \
         lambda update-function-code --function-name "${fn_name}" \
                                     --zip-file fileb://${fn_name}.zip
+    aws --profile ${AWSCLI_LAMBDA_UPLOAD_PROFILE} \
+        lambda update-function-configuration --function-name "${fn_name}" \
+                                             --role ${LAMBDA_EXECUTION_ROLE} \
+                                             --handler index.handler
   else
     aws --profile ${AWSCLI_LAMBDA_UPLOAD_PROFILE} \
         lambda create-function --function-name "${fn_name}" \
@@ -107,53 +114,11 @@ function invoke {
 }
 
 function bootstrap_aws {
-  local role_name=neuro_lambda_bootstrap
-  cat <<EOF > assume_role_policy.json
-{
-  "Version": "2012-10-17",
-  "Statement": [
-    {
-      "Sid": "",
-      "Effect": "Allow",
-      "Principal": {
-        "Service": "lambda.amazonaws.com"
-      },
-      "Action": "sts:AssumeRole"
-    }
-  ]
-}
-EOF
-  role_arn=$(
-  aws --profile ${AWSCLI_BOOTSTRAP_PROFILE} \
-      --query "Role.Arn" \
-      iam create-role \
-      --role-name ${role_name} \
-      --assume-role-policy-document file://assume_role_policy.json
-  )
-  rm assume_role_policy.json
-  cat <<EOF > exe_policy.json
-{
-  "Version": "2012-10-17",
-  "Statement": [
-    {
-      "Effect": "Allow",
-      "Action": [
-        "logs:CreateLogGroup",
-        "logs:CreateLogStream",
-        "logs:PutLogEvents"
-      ],
-      "Resource": "arn:aws:logs:*:*:*"
-    }
-  ]
-}
-EOF
-  aws --profile ${AWSCLI_BOOTSTRAP_PROFILE} \
-      iam put-role-policy \
-      --role-name ${role_name} \
-      --policy-name neuro_bootstrap_exe_policy \
-      --policy-document file://exe_policy.json
-  rm exe_policy.json
-  echo "created IAM role ${role_name}"
+  add_role neuro_lambda_bootstrap
+  deploy_role > /dev/null
+  local role_arn=`aws --profile ${AWSCLI_ROLE_PROFILE} --query "Role.Arn" \
+                      iam get-role --role-name neuro_lambda_bootstrap`
+  echo "created IAM role neuro_lambda_bootstrap"
   echo "You should put the value"
   echo -n "    LAMBDA_EXECUTION_ROLE="
   echo ${role_arn}
@@ -188,6 +153,7 @@ function edit_role {
   if [ -f index.js ] ; then rm index.js ; fi
   if [ -f valid.json ] ; then rm valid.json ; fi
   if [ -f policy.json ] ; then rm policy.json ; fi
+  if [ -f config.function.env ] ; then rm config.function.env ; fi
   ln -s .repository/roles/${name}/policy.json
 }
 
@@ -208,13 +174,13 @@ function deploy_role {
   ]
 }
 EOF
-  aws --profile ${AWSCLI_POLICY_PROFILE} \
+  aws --profile ${AWSCLI_ROLE_PROFILE} \
       --query "Role.Arn" \
       iam create-role \
       --role-name ${name} \
       --assume-role-policy-document file://assume_role_policy.json
   rm assume_role_policy.json
-  aws --profile ${AWSCLI_POLICY_PROFILE} \
+  aws --profile ${AWSCLI_ROLE_PROFILE} \
       iam put-role-policy \
       --role-name ${name} \
       --policy-name neuro_bootstrap_exe_policy \
@@ -227,7 +193,6 @@ function __help {
 
 function help {
   echo "Available Commands"
-  echo " *  bootstrap-aws"
   echo " *  new PROJECTNAME"
   echo " *  add HREF HTTPMETHOD"
   echo " *  edit HREF HTTPMETHOD"
@@ -236,13 +201,17 @@ function help {
   echo " *  add-role ROLENAME"
   echo " *  edit-role ROLENAME"
   echo " *  deploy-role"
+  echo " *  bootstrap-aws"
 }
 
 function neuro.function_exists {
   local fn_name=$1
+  set +e
   aws --profile ${AWSCLI_LAMBDA_LIST_PROFILE} \
       lambda get-function --function-name ${fn_name} 2>&1 > /dev/null
-  return $?
+  local rv=$?
+  set -e
+  return $rv
 #  aws --profile ${AWSCLI_LAMBDA_LIST_PROFILE} \
 #      --query "Functions[?FunctionName == '$1'].FunctionName | [0]" \
 #      lambda list-functions
@@ -252,5 +221,8 @@ fn=$1 ; shift
 fn_name=`echo ${fn} | sed -e 's.-._.g'`
 if [ -f config.env ] ; then
   source config.env
+fi
+if [ -f config.function.env ] ; then
+    source config.function.env
 fi
 ${fn_name} $*
