@@ -70,8 +70,11 @@ function deploy {
   local fn_name=`echo ${method}${path} | sed -e 's./._.g'`
   zip -q ${fn_name}.zip index.js
 
+  set +e
   neuro.function_exists $fn_name
-  if [ $? == 0 ] ; then
+  local rv=$?
+  set -e
+  if [ $rv == 0 ] ; then
     aws --profile ${AWSCLI_LAMBDA_UPLOAD_PROFILE} \
         lambda update-function-code --function-name "${fn_name}" \
                                     --zip-file fileb://${fn_name}.zip
@@ -110,7 +113,7 @@ function invoke {
   local status=`cat log.txt | grep StatusCode | awk -F: '{print $2}'`
   echo status: ${status}
   cat log.txt | grep LogResult | awk -F: '{print $2}' | \
-     sed -e 's/^\s*"//' -e 's/".*$//' | base64 --decode
+     sed -e 's/^[^"]*"//' -e 's/".*$//' | base64 --decode
   rm log.txt
 }
 
@@ -207,11 +210,9 @@ function help {
 
 function neuro.function_exists {
   local fn_name=$1
-  set +e
   aws --profile ${AWSCLI_LAMBDA_LIST_PROFILE} \
       lambda get-function --function-name ${fn_name} 2>&1 > /dev/null
   local rv=$?
-  set -e
   return $rv
 #  aws --profile ${AWSCLI_LAMBDA_LIST_PROFILE} \
 #      --query "Functions[?FunctionName == '$1'].FunctionName | [0]" \
